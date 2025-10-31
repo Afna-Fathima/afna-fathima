@@ -1,0 +1,415 @@
+// server.js
+// Single-file full-stack Food Delivery app
+// Run: npm init -y
+//      npm install express body-parser
+//      node server.js
+//
+// Then open http://localhost:4000
+
+const express = require('express');
+const bodyParser = require('body-parser');
+const fs = require('fs');
+const path = require('path');
+
+const app = express();
+const PORT = process.env.PORT || 4000;
+const ORDERS_FILE = path.join(__dirname, 'orders.json');
+
+// Middleware
+app.use(bodyParser.json());
+
+// Ensure orders.json exists
+if (!fs.existsSync(ORDERS_FILE)) {
+  fs.writeFileSync(ORDERS_FILE, JSON.stringify([], null, 2));
+}
+
+// --- Sample product data (in-memory) ---
+let foods = [
+  { id: 1, name: "Margherita Pizza", desc: "Classic cheese & tomato", price: 7.99, img: "" },
+  { id: 2, name: "Pepperoni Pizza", desc: "Pepperoni & cheese", price: 8.99, img: "" },
+  { id: 3, name: "Veggie Burger", desc: "Grilled patty, lettuce, tomato", price: 6.49, img: "" },
+  { id: 4, name: "Chicken Biryani", desc: "Fragrant rice with spiced chicken", price: 9.50, img: "" },
+  { id: 5, name: "Caesar Salad", desc: "Romaine, parmesan, croutons", price: 5.75, img: "" }
+];
+
+// --- API routes ---
+
+// Get all foods
+app.get('/api/foods', (req, res) => {
+  res.json(foods);
+});
+
+// Get single food by id
+app.get('/api/foods/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const item = foods.find(f => f.id === id);
+  if (!item) return res.status(404).json({ error: 'Food not found' });
+  res.json(item);
+});
+
+// Place an order
+app.post('/api/orders', (req, res) => {
+  const { customerName, address, phone, items, total } = req.body;
+  if (!customerName || !address || !phone || !Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ error: 'Missing order data' });
+  }
+
+  const orders = JSON.parse(fs.readFileSync(ORDERS_FILE));
+  const newOrder = {
+    id: orders.length ? orders[orders.length - 1].id + 1 : 1,
+    customerName,
+    address,
+    phone,
+    items,
+    total,
+    status: 'received',
+    createdAt: new Date().toISOString()
+  };
+  orders.push(newOrder);
+  fs.writeFileSync(ORDERS_FILE, JSON.stringify(orders, null, 2));
+  res.json({ success: true, order: newOrder });
+});
+
+// Get all orders (simple admin endpoint)
+app.get('/api/orders', (req, res) => {
+  const orders = JSON.parse(fs.readFileSync(ORDERS_FILE));
+  res.json(orders);
+});
+
+// Update order status (simple)
+app.put('/api/orders/:id/status', (req, res) => {
+  const id = Number(req.params.id);
+  const { status } = req.body;
+  const orders = JSON.parse(fs.readFileSync(ORDERS_FILE));
+  const idx = orders.findIndex(o => o.id === id);
+  if (idx === -1) return res.status(404).json({ error: 'Order not found' });
+  orders[idx].status = status || orders[idx].status;
+  fs.writeFileSync(ORDERS_FILE, JSON.stringify(orders, null, 2));
+  res.json({ success: true, order: orders[idx] });
+});
+
+// --- Serve frontend HTML (single page) ---
+app.get('/', (req, res) => {
+  res.send(htmlPage());
+});
+
+// Static for potential images (not used but ready)
+app.use('/static', express.static(path.join(__dirname, 'static')));
+
+// Start server
+app.listen(PORT, () => {
+  console.log(`Food Delivery app running at http://localhost:${PORT}`);
+});
+
+// --- Frontend HTML as template string ---
+function htmlPage() {
+  return `
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Mini Food Delivery</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet"/>
+<style>
+  body { padding-top: 2rem; }
+  .food-card { min-height: 190px; }
+  .cart-badge { position: relative; top: -10px; left: -8px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <header class="d-flex justify-content-between align-items-center mb-4">
+    <h2>Mini Food Delivery</h2>
+    <div>
+      <button class="btn btn-outline-primary me-2" id="adminViewBtn">Admin: Orders</button>
+      <button class="btn btn-primary" id="viewCartBtn">
+        Cart <span class="badge bg-danger cart-badge" id="cartCount">0</span>
+      </button>
+    </div>
+  </header>
+
+  <div id="mainContent">
+    <div id="foodsRow" class="row g-3"></div>
+  </div>
+
+  <!-- Cart Modal -->
+  <div class="modal fade" id="cartModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <form id="checkoutForm" class="needs-validation" novalidate>
+          <div class="modal-header">
+            <h5 class="modal-title">Your Cart</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <div id="cartList"></div>
+            <hr/>
+            <div class="mb-3">
+              <label class="form-label">Name</label>
+              <input required name="name" class="form-control" />
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Address</label>
+              <textarea required name="address" class="form-control"></textarea>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Phone</label>
+              <input required name="phone" class="form-control" />
+            </div>
+            <div id="checkoutTotal" class="fw-bold"></div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Continue Shopping</button>
+            <button type="submit" class="btn btn-success">Place Order</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Admin Orders Modal -->
+  <div class="modal fade" id="adminModal" tabindex="-1">
+    <div class="modal-dialog modal-xl">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">Orders (Admin)</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div id="ordersTableWrapper">Loading orders...</div>
+        </div>
+        <div class="modal-footer">
+          <button data-bs-dismiss="modal" class="btn btn-secondary">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+  // Frontend logic
+  let foods = [];
+  let cart = JSON.parse(localStorage.getItem('mini_cart') || '[]');
+
+  const cartModal = new bootstrap.Modal(document.getElementById('cartModal'));
+  const adminModal = new bootstrap.Modal(document.getElementById('adminModal'));
+
+  document.getElementById('viewCartBtn').addEventListener('click', () => {
+    renderCart();
+    cartModal.show();
+  });
+
+  document.getElementById('adminViewBtn').addEventListener('click', () => {
+    loadOrders();
+    adminModal.show();
+  });
+
+  // Fetch foods
+  async function loadFoods() {
+    const res = await fetch('/api/foods');
+    foods = await res.json();
+    renderFoods();
+    updateCartCount();
+  }
+
+  // Render food cards
+  function renderFoods() {
+    const container = document.getElementById('foodsRow');
+    container.innerHTML = '';
+    foods.forEach(f => {
+      const col = document.createElement('div');
+      col.className = 'col-sm-6 col-md-4';
+      col.innerHTML = \`
+        <div class="card food-card shadow-sm">
+          <div class="card-body d-flex flex-column">
+            <h5 class="card-title">\${f.name}</h5>
+            <p class="card-text flex-grow-1">\${f.desc}</p>
+            <div class="d-flex justify-content-between align-items-center">
+              <div class="fw-bold">\${formatCurrency(f.price)}</div>
+              <div>
+                <button class="btn btn-sm btn-outline-primary" onclick="addToCart(\${f.id})">Add</button>
+              </div>
+            </div>
+          </div>
+        </div>\`;
+      container.appendChild(col);
+    });
+  }
+
+  function formatCurrency(n){ return '₹' + Number(n).toFixed(2); }
+
+  // Cart functions
+  function addToCart(id){
+    const item = foods.find(f => f.id === id);
+    if(!item) return;
+    const existing = cart.find(c => c.id === id);
+    if(existing) existing.qty += 1;
+    else cart.push({ id: item.id, name: item.name, price: item.price, qty: 1 });
+    saveCart();
+    updateCartCount();
+  }
+
+  function saveCart(){
+    localStorage.setItem('mini_cart', JSON.stringify(cart));
+  }
+
+  function updateCartCount(){
+    const cnt = cart.reduce((s,i)=> s + i.qty, 0);
+    document.getElementById('cartCount').innerText = cnt;
+  }
+
+  function renderCart(){
+    const wrapper = document.getElementById('cartList');
+    if(cart.length === 0){
+      wrapper.innerHTML = '<p>Your cart is empty.</p>';
+      document.getElementById('checkoutTotal').innerText = '';
+      return;
+    }
+    let html = '<ul class="list-group">';
+    cart.forEach(it => {
+      html += \`<li class="list-group-item d-flex justify-content-between align-items-center">
+        <div>
+          <strong>\${it.name}</strong><br/><small>Qty: \${it.qty}</small>
+        </div>
+        <div>
+          <span>\${formatCurrency(it.price * it.qty)}</span>
+          <button class="btn btn-sm btn-outline-secondary ms-2" onclick="decreaseQty(\${it.id})">-</button>
+          <button class="btn btn-sm btn-outline-secondary ms-1" onclick="increaseQty(\${it.id})">+</button>
+          <button class="btn btn-sm btn-danger ms-1" onclick="removeItem(\${it.id})">x</button>
+        </div>
+      </li>\`;
+    });
+    html += '</ul>';
+    wrapper.innerHTML = html;
+    document.getElementById('checkoutTotal').innerText = 'Total: ' + formatCurrency(cartTotal());
+    // attach submit handler
+    const form = document.getElementById('checkoutForm');
+    form.onsubmit = handleCheckout;
+  }
+
+  function increaseQty(id){
+    const it = cart.find(c => c.id === id);
+    if(it){ it.qty += 1; saveCart(); renderCart(); updateCartCount(); }
+  }
+  function decreaseQty(id){
+    const it = cart.find(c => c.id === id);
+    if(it){
+      it.qty = Math.max(1, it.qty - 1);
+      saveCart();
+      renderCart();
+      updateCartCount();
+    }
+  }
+  function removeItem(id){
+    cart = cart.filter(c => c.id !== id);
+    saveCart();
+    renderCart();
+    updateCartCount();
+  }
+
+  function cartTotal(){
+    return cart.reduce((s,i)=> s + i.price * i.qty, 0);
+  }
+
+  // Checkout: post order to server
+  async function handleCheckout(e){
+    e.preventDefault();
+    if(cart.length === 0){ alert('Cart empty'); return; }
+    const form = e.target;
+    if(!form.checkValidity()){
+      form.classList.add('was-validated');
+      return;
+    }
+    const payload = {
+      customerName: form.name.value,
+      address: form.address.value,
+      phone: form.phone.value,
+      items: cart,
+      total: cartTotal()
+    };
+    try {
+      const res = await fetch('/api/orders', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if(data.success){
+        alert('Order placed! Order ID: ' + data.order.id);
+        cart = [];
+        saveCart();
+        updateCartCount();
+        cartModal.hide();
+      } else {
+        alert('Failed to place order: ' + (data.error || 'Unknown'));
+      }
+    } catch(err){
+      alert('Network error placing order');
+    }
+  }
+
+  // Admin: load orders
+  async function loadOrders(){
+    const wrapper = document.getElementById('ordersTableWrapper');
+    try {
+      const res = await fetch('/api/orders');
+      const orders = await res.json();
+      if(orders.length === 0) {
+        wrapper.innerHTML = '<p>No orders yet.</p>';
+        return;
+      }
+      let html = '<table class="table table-striped"><thead><tr><th>ID</th><th>Customer</th><th>Items</th><th>Total</th><th>Status</th><th>Action</th></tr></thead><tbody>';
+      orders.forEach(o => {
+        const itemsSummary = o.items.map(i => \`\${i.name} x\${i.qty}\`).join('<br/>');
+        html += \`<tr>
+          <td>\${o.id}</td>
+          <td>\${o.customerName}<br/><small>\${o.phone}<br/>\${o.address}</small></td>
+          <td>\${itemsSummary}</td>
+          <td>\${formatCurrency(o.total)}</td>
+          <td id="status-\${o.id}">\${o.status}</td>
+          <td>
+            <button class="btn btn-sm btn-success" onclick="setStatus(\${o.id}, 'preparing')">Preparing</button>
+            <button class="btn btn-sm btn-warning" onclick="setStatus(\${o.id}, 'on the way')">On the way</button>
+            <button class="btn btn-sm btn-secondary" onclick="setStatus(\${o.id}, 'delivered')">Delivered</button>
+          </td>
+        </tr>\`;
+      });
+      html += '</tbody></table>';
+      wrapper.innerHTML = html;
+    } catch (err) {
+      wrapper.innerText = 'Failed loading orders';
+    }
+  }
+
+  async function setStatus(id, status){
+    try {
+      const res = await fetch('/api/orders/' + id + '/status', {
+        method: 'PUT',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ status })
+      });
+      const data = await res.json();
+      if(data.success){
+        document.getElementById('status-' + id).innerText = data.order.status;
+      } else alert('Failed update');
+    } catch(e){ alert('Network error'); }
+  }
+
+  // Initial load
+  loadFoods();
+
+  // Expose some functions for inline onclicks
+  window.addToCart = addToCart;
+  window.increaseQty = increaseQty;
+  window.decreaseQty = decreaseQty;
+  window.removeItem = removeItem;
+  window.setStatus = setStatus;
+  window.loadOrders = loadOrders;
+</script>
+</body>
+</html>
+`;
+}
